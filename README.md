@@ -1,6 +1,6 @@
 # X-cellent Cloudgateway
 
-At [x-cellent](https://www.x-cellent.com/), we are building and maintaining [cloud-native systems](https://metal-stack.io/) and often we are faced with complicated networking problems when we try to connect two applications built with different generations of technologies. On the one hand, the network traffic is often, if not always, regulated by multiple firewalls and/or NAT. On the other hand, some legacy systems use private IP addresses outside of the RFC 1918 space, making direct routing impossible. Here comes **X-cellent Cloudgateway** to the rescue.
+At [x-cellent](https://www.x-cellent.com/), we are building and maintaining [cloud-native systems](https://metal-stack.io/) and often we are faced with complicated networking problems when we try to connect two applications built with different generations of technologies. On the one hand, the network traffic is often, if not always, regulated by multiple firewalls and/or NAT. On the other hand, some legacy systems use private IP addresses outside of the RFC 1918 space, making direct routing impossible. Here comes cloudgateway to the rescue.
 
 ## Let's start small
 
@@ -69,7 +69,7 @@ The newly created interface `wg0` in each container is assigned an IP address an
 
 ## VPN with WireGuard&reg;
 
-Under the hood, Cloudgateway is powered by [WireGuard](https://www.wireguard.com/). Let's see that in action! In one terminal, run:
+Under the hood, cloudgateway is powered by [WireGuard&reg;](https://www.wireguard.com/). Let's see that in action! In one terminal, run:
 
 ```sh
 docker exec -it minimal-server-1 bash
@@ -202,7 +202,7 @@ listening on eth0, link-type EN10MB (Ethernet), snapshot length 262144 bytes
 
 ## Pipe
 
-Another pillar of CloudGateway is the pipe. In our example, we can find a pipe in the CloudGateway [config](https://github.com/LimKianAn/x-cellent-cloudgateway/demo/minimal/client/conf.yaml), which is consumed by the container as shown in the `docker-compose.yaml`. The pipe looks like this:
+Another pillar of cloudgateway is _Pipe_, which can be found in cloudgateway [conf.yaml](https://github.com/LimKianAn/x-cellent-cloudgateway/demo/minimal/client/conf.yaml) which is consumed by the container as shown in the docker-compose.yaml above.
 
 ```yaml
 name: nginx
@@ -211,16 +211,16 @@ remote: nginx:80
 ```
 
 - The `name` is just a name for humans.
-- The `port` is the listening port of the build-in TCP proxy in cloudGateway.
+- The `port` is the listening port of the build-in TCP proxy of cloudgateway. Each pipe has it's own port.
 - The `remote` part is the endpoint of a remote service of interest.
 
-Let's see the `port` in action! Still inside the `docker exec` terminals as above, run the following command:
+Let's examine this port a bit. Run the following command inside the server and client container:
 
 ```sh
 ss -tulpen
 ```
 
-The results from the server should read:
+The outputs from the server should read as follows:
 
 ```terminal
 Netid       State        Recv-Q        Send-Q               Local Address:Port                Peer Address:Port       Process
@@ -232,14 +232,14 @@ tcp         LISTEN       0             4096                             *:9000  
 tcp         LISTEN       0             4096                             *:8080                           *:*           users:(("cloudgateway",pid=1,fd=10)) ino:27359212 sk:1a cgroup:unreachable:1 v6only:0 <->
 ```
 
-- Two ports bound to `127.0.0.11` are docker DNS handlers when we specify our own docker network.
-- The port `8765` bound to all addresses is for UDP communication in VPN as mentioned above.
+- Two ports bound to `127.0.0.11` are docker DNS handlers. They appear when we specify our own docker network.
+- The port `8765` bound to all addresses is for UDP communication in VPN as mentioned in the last section.
 - The port `9000` is for the built-in metrics server.
-- The port `8080` is the listening port of the build-in TCP proxy.
+- The port `8080` is the listening port of the build-in TCP proxy for the pipe above.
 
-The results from the client is basically the same, except the random port for UDP communication in VPN.
+The outputs from the client is basically the same, except the random port for UDP communication in VPN.
 
-The `remote` part of the pipe, `nginx:80` in our case, is more intricate. On the server side, it's left intact since `nginx` is a known domain name. Remember that the server and the nginx containers lie in the same docker network `legacy`. On the client side, it's translated to `{server's VPN IP}:{proxy port}`, `10.192.0.121:8080` in our case. Let's see that in action!
+The `remote` part of the pipe, `nginx:80` in our case, is more intricate. At the server, it's left intact since `nginx` is a known domain name in the _legacy_ network. Remember that the server and the nginx containers sit in the same network. At the client, it's translated to `{server's VPN IP}:{proxy port}`, `10.192.0.121:8080` in our case. Let's see that in action.
 
 ```sh
 # at server
@@ -260,16 +260,143 @@ listening on wg0, link-type RAW (Raw IP), snapshot length 262144 bytes
 ...
 ```
 
-We recognize the translated remote endpoint of the pipe, `10.192.0.121.8080` in our case, but what about the source port, `57990`? We don't see this port if we run `ss -tulpen` at the client. Let's dive in!
+We recognize the translated endpoint of the remote service, `10.192.0.121.8080` in our case, but what about the source port, `57990`? We don't see this port if we run `ss -tulpen` at the client. Let's dive in!
 
-At client, there are two synced TCP connections, source and destination:
-127.0.0.1:8080 (local) <-> 127.0.0.1:53236 (remote)
-10.192.0.245:57990 (local) <-> 10.192.0.121:8080 (remote)
+All the traffic arriving at the pipe's port is handled by the TCP proxy, where there're two TCP connections constantly being synced. One is called source and the other one is called destination. The source connection connects to the listening port, _8080_ is our case and the destination connection connects to the endpoint of the remote service. At client, these two connections look as follows:
+Source: 127.0.0.1:8080 (local) <-> 127.0.0.1:53236 (remote)
+Destination: 10.192.0.245:57990 (local) <-> 10.192.0.121:8080 (remote)
 
-Same at the server:
-10.192.0.121:8080 (local) <-> 10.192.0.245:57990 (remote)
-172.25.0.2:40160 (local) <-> 172.25.0.3:80 (remote)
+Similarly at the server:
+Source: 10.192.0.121:8080 (local) <-> 10.192.0.245:57990 (remote)
+Destination: 172.25.0.2:40160 (local) <-> 172.25.0.3:80 (remote)
 
-Note that the destination TCP connection at the client is exactly the source one at the server with the reverse local and remote endpoints. The port `57990` we observed in `tcpdump` is exactly the one involved in the TCP communication.
+Note that the destination TCP connection at the client is exactly the source one at the server with the reverse local and remote endpoints. The port _57990_ we observed in the outputs of `tcpdump` is exactly the one involved in this very TCP connection.
+
+Let us finish this section by examining the traffic at the interface `eth0` again.
+
+```sh
+# at server
+tcpdump --interface eth0 -n
+```
+
+```sh
+# at client
+curl localhost:8080
+```
+
+At the server, we shall see the similar outputs as follows.
+
+```terminal
+listening on eth0, link-type EN10MB (Ethernet), snapshot length 262144 bytes
+08:46:58.961805 IP 172.24.0.2.55142 > 172.24.0.3.8765: UDP, length 96
+08:46:58.961846 IP 172.24.0.3.8765 > 172.24.0.2.55142: UDP, length 96
+...
+```
+
+As we expected, the traffic between the server and the client goes through the VPN's UDP ports.
+
+The life of a packet would look as follows when we run `curl localhost:8080` at the host.
+
+localhost:8080 (mapped to the _client_ container port 8080, the configured port of a pipe)
+-> client-container-IP:8080
+-> cloudgateway's TCP proxy syncing source and destination TCP connections
+-> server-VPN-IP:8080 (traffic actually going through VPN UDP ports)
+-> cloudgateway's TCP proxy syncing two connections again
+-> nginx-container-IP:80 (nginx port)
 
 ## Reverse Pipe
+
+How about if we want to reach a service in the cloud-native network from a client in the legacy network? Reverse pipe comes to rescue. In contrast to normal pipes, where a service is resolvable within the server's network without going through the VPN to another network, a revere pipe is for the scenario where a service does sit in another network and the server needs the VPN to fetch it. Here's the [docker-compose.yaml](https://github.com/LimKianAn/x-cellent-cloudgateway/demo/reverse/docker-compose.yaml) for such a reverse pipe.
+
+```yaml
+version: "3.8"
+networks:
+  legacy:
+    name: legacy
+  cloudnative:
+    name: cloudnative
+services:
+  nginx:
+    networks:
+      - cloudnative
+    image: nginx
+  server:
+    networks:
+      - legacy
+      - cloudnative
+    image: ghcr.io/fi-ts/cloud-gateway:latest
+    volumes:
+      - /dev/net/tun:/dev/net/tun
+      - ./server:/etc/cloudgateway
+    cap_add:
+      - NET_ADMIN
+    environment:
+      - CLOUD_GATEWAY_ENGINE=boringtun
+      - CLOUD_GATEWAY_LOG_LEVEL=debug
+  client-cloudnative:
+    networks:
+      - cloudnative
+    image: ghcr.io/fi-ts/cloud-gateway:latest
+    volumes:
+      - /dev/net/tun:/dev/net/tun
+      - ./client/cloudnative:/etc/cloudgateway
+    cap_add:
+      - NET_ADMIN
+    environment:
+      - CLOUD_GATEWAY_ENGINE=boringtun
+      - CLOUD_GATEWAY_LOG_LEVEL=debug
+  client-legacy:
+    networks:
+      - legacy
+    image: ghcr.io/fi-ts/cloud-gateway:latest
+    volumes:
+      - /dev/net/tun:/dev/net/tun
+      - ./client/legacy:/etc/cloudgateway
+    cap_add:
+      - NET_ADMIN
+    environment:
+      - CLOUD_GATEWAY_ENGINE=boringtun
+      - CLOUD_GATEWAY_LOG_LEVEL=debug
+    ports:
+      - 8080:8080
+```
+
+This time, nginx is sitting in the cloud-native network instead of the legacy one and there are two clients instead of one, each sitting in their respective network. Note that the port _8080_ is mapped the port _8080_ in the _client-legacy_ container to mimic the case. Let's see the reverse pipe in action.
+
+```sh
+# in the project root
+cd demo/reverse
+docker compose up
+```
+
+Then, open another terminal and run `curl localhost:8080`. Voilà! We shall see the default welcome page of nginx again.
+
+Let's go through the life of a packet.
+
+localhost:8080 (mapped to the client-legacy container port 8080)
+-> client-legacy-container-IP:8080
+-> cloudgateway's TCP proxy syncing two TCP connections
+-> server-VPN-IP:8080 (traffic actually going through VPN UDP ports)
+-> cloudgateway's TCP proxy syncing again
+-> client-cloudnative-VPN-IP:8080 (VPN UDP communications)
+-> cloudgateway's TCP proxy syncing again
+-> nginx-container-IP:80
+
+Finally, let's check the config files of cloudgateway in each container. Note that for the server and the client in the cloudnative network, we have to specify the peer:
+
+```yaml
+name: nginx
+port: 8080
+remote: nginx:80
+peer: client-cloudnative
+```
+
+However, for the client in the legacy network it's the same as the previous demo:
+
+```yaml
+name: nginx
+port: 8080
+remote: nginx:80
+```
+
+Why is that? Actually, in the eyes of the client in the legacy network, nothing has changed. It's still a pipe which must go through the server. Therefore, nothing needs to change. For the server and the client in the cloudnative network, it's another story. We have to tell cloudgateway where the service, nginx in our case, is resolvable. To put it another way, we have to tell cloudgateway to which peer the traffic has to be sent. Therefore, the name of this peer has to match the one listed under `peers` in the server's config file. To cut it short: specify the peer of a pipe for the server and the client where the remote endpoint of the service is resolvable.

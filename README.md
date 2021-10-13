@@ -263,12 +263,18 @@ listening on wg0, link-type RAW (Raw IP), snapshot length 262144 bytes
 We recognize the translated endpoint of the remote service, `10.192.0.121.8080` in our case, but what about the source port, `57990`? We don't see this port if we run `ss -tulpen` at the client. Let's dive in!
 
 All the traffic arriving at the pipe's port is handled by the TCP proxy, where there're two TCP connections constantly being synced. One is called source and the other one is called destination. The source connection connects to the listening port, _8080_ is our case and the destination connection connects to the endpoint of the remote service. At client, these two connections look as follows:
+
+```terminal
 Source: 127.0.0.1:8080 (local) <-> 127.0.0.1:53236 (remote)
 Destination: 10.192.0.245:57990 (local) <-> 10.192.0.121:8080 (remote)
+```
 
 Similarly at the server:
+
+```terminal
 Source: 10.192.0.121:8080 (local) <-> 10.192.0.245:57990 (remote)
 Destination: 172.25.0.2:40160 (local) <-> 172.25.0.3:80 (remote)
+```
 
 Note that the destination TCP connection at the client is exactly the source one at the server with the reverse local and remote endpoints. The port _57990_ we observed in the outputs of `tcpdump` is exactly the one involved in this very TCP connection.
 
@@ -297,12 +303,14 @@ As we expected, the traffic between the server and the client goes through the V
 
 The life of a packet would look as follows when we run `curl localhost:8080` at the host.
 
+```terminal
 localhost:8080 (mapped to the _client_ container port 8080, the configured port of a pipe)
 -> client-container-IP:8080
 -> cloudgateway's TCP proxy syncing source and destination TCP connections
 -> server-VPN-IP:8080 (traffic actually going through VPN UDP ports)
 -> cloudgateway's TCP proxy syncing two connections again
 -> nginx-container-IP:80 (nginx port)
+```
 
 ## Reverse Pipe
 
@@ -373,6 +381,7 @@ Then, open another terminal and run `curl localhost:8080`. Voilà! We shall see 
 
 Let's go through the life of a packet.
 
+```terminal
 localhost:8080 (mapped to the client-legacy container port 8080)
 -> client-legacy-container-IP:8080
 -> cloudgateway's TCP proxy syncing two TCP connections
@@ -381,6 +390,7 @@ localhost:8080 (mapped to the client-legacy container port 8080)
 -> client-cloudnative-VPN-IP:8080 (VPN UDP communications)
 -> cloudgateway's TCP proxy syncing again
 -> nginx-container-IP:80
+```
 
 Finally, let's check the config files of cloudgateway in each container. Note that for the server and the client in the cloudnative network, we have to specify the peer:
 

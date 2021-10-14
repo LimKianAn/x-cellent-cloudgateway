@@ -1,10 +1,10 @@
-# X-cellent Cloudgateway
+# Cloudgateway
 
-At [x-cellent](https://www.x-cellent.com/), we are building and maintaining [cloud-native systems](https://metal-stack.io/) and often we are faced with complicated networking problems when we try to connect two applications built with different generations of technologies. On the one hand, the network traffic is often, if not always, regulated by multiple firewalls and/or NAT. On the other hand, some legacy systems use private IP addresses outside of the RFC 1918 space, making direct routing impossible. Here comes cloudgateway to the rescue.
+At [x-cellent](https://www.x-cellent.com/), we are building and maintaining [cloud-native systems](https://metal-stack.io/) and often we are faced with complicated networking problems when we try to connect two applications built with different generations of technologies. On the one hand, the network traffic is often, if not always, regulated by multiple firewalls and/or NAT. On the other hand, some legacy systems use private IP addresses outside the RFC 1918 space, which makes direct routing impossible. That's where cloudgateway comes in handy.
 
-## Let's start small
+## Demo
 
-The following is a [minimal](https://github.com/LimKianAn/x-cellent-cloudgateway/demo/minimal/docker-compose.yaml) [docker compose](https://docs.docker.com/compose/install/) file which shows the power of cloudgateway.
+Here's a minimal [_docker-compose.yaml_](https://github.com/LimKianAn/x-cellent-cloudgateway/demo/minimal/docker-compose.yaml).
 
 ```yaml
 version: "3.8"
@@ -47,7 +47,12 @@ services:
       - 8080:8080
 ```
 
-We have two docker networks: `legacy` and `cloudnative`, which represent two private networks. There's an nginx process running in the former network and we want to tap into that from the latter network. How can we go about achieving that? We build a tunnel by running two cloudgateway processes in these two networks respectively. Let's see that in action!
+- Two docker networks: `legacy` and `cloudnative`, which represent two private networks
+- An nginx process runs in the former network and we want to tap into that from the latter network.
+- Two _cloudgateway_ containers: `server` and `client`. The server sits in both networks, whereas the client sits only in cloudnative network. Note that the configuration of cloudgateway is provided in `volumes`.
+- The port `8080` of the host is mapped to the same port of the client container.
+
+Our target is to tap into the niginx rnning behind the server. Note that we don't have access to the legacy network. How can we go about achieving that? We build a tunnel between cloudgateway server and client. Let's see that in action!
 
 ```sh
 git clone git@github.com:LimKianAn/x-cellent-cloudgateway.git
@@ -55,9 +60,14 @@ cd demo/minimal
 docker compose up
 ```
 
-Now, we have our minimal demo running. Let's open another terminal and run `curl localhost:8080`. Voilà! We should see the default welcome page of nginx.
+Now, our demo is up and running. Let's open another terminal and run `curl localhost:8080`. Voilà! We should see the default welcome page of nginx.
 
-Before we `docker exec` into the containers we just created, let's have a look at the logs of `docker compose up`. Two specific lines are of interest to us. (They might not be adjacent to each other.)
+- Cloudgateway connects apps among private networks securely and easily.
+- Cloudgateway is backed by end-to-end VPN and easy-to-configure TCP proxy.
+
+## VPN with WireGuard&reg;
+
+From the logs of `docker compose up`, two specific lines are of interest to us. (They might not be adjacent to each other.)
 
 ```termial
 minimal-server-1  | [#] ip -4 address add 10.192.0.121/24 dev wg0
@@ -65,11 +75,9 @@ minimal-server-1  | [#] ip -4 address add 10.192.0.121/24 dev wg0
 minimal-client-1  | [#] ip -4 address add 10.192.0.245/32 dev wg0
 ```
 
-The newly created interface `wg0` in each container is assigned an IP address and a CIDR mask. The IP address is clear, meaning the IP address in the VPN. The CIDR masks of the server and the client are different. For the server `/24` implies that there are peers assigned IP addresses in the range `10.192.0.0/24`, which means multiple clients. In contrast, for the client `/32` doesn't imply a range of peers since it's only going to talk to the server.
+Under the hood, cloudgateway is powered by [WireGuard&reg;](https://www.wireguard.com/), which creates the above new interface, `wg0`. This interface is assigned an IP address and a CIDR mask. The IP address is rather clear - a private IP address in the VPN. The CIDR masks of the server and the client are different. For the server, `/24` implies that there are multiple peers, multiple clients in the context of cloudgateway. Those clients are assigned private IP addresses in the range `10.192.0.0/24`. In contrast, there's only one peer, the server, since it's only going to talk to the server.
 
-## VPN with WireGuard&reg;
-
-Under the hood, cloudgateway is powered by [WireGuard&reg;](https://www.wireguard.com/). Let's see that in action! In one terminal, run:
+Let's `docker exec` into the containers and dig more! In one terminal, run:
 
 ```sh
 docker exec -it minimal-server-1 bash
@@ -87,7 +95,7 @@ In each terminal, run:
 wg
 ```
 
-The results in the server terminal would read:
+The outputs at the server would read in the following format:
 
 ```terminal
 interface: wg0
@@ -102,7 +110,7 @@ peer: QqdKxpGpG1TTuyjCayMpRRKwLm5kjyIKZybxjv8oDnQ=
   transfer: 948 B received, 860 B sent
 ```
 
-The results in the client terminal would read:
+Outputs in the client terminal:
 
 ```terminal
 interface: wg0
@@ -117,30 +125,29 @@ peer: 2o3hItYcvPrcmDMog6rOhmdzZd6PH+QIZtCvZnVrslU=
   transfer: 860 B received, 1.07 KiB sent
 ```
 
-Notice that for `wg0` in the server container, the `listening port` is `8765`, which is assigned by cloudgateway. In contrast, for `wg0` in the client container, the `listening port` is randomly assigned by WireGuard. The reason behind this is that cloudgateway was conceived where we need a server sitting in a legacy-network and this server should respond to requests from applications in a cloud-native environment, like kubernetes. In order to let other clients find the server in the public, the port of the server needs to be fixed (?).
+Notice that for wg0 at the server, the `listening port` is `8765`, which is assigned by cloudgateway, whereas at the client the listening port is randomly assigned by WireGuard. The reason behind this is that cloudgateway was conceived where we need a server sitting in legacy network and this server should respond to requests from applications in a cloud-native environment, kubernetes. In order to let other clients find the server in the public network, the port of the VPN communication at the server needs to be fixed.
 
-The `endpoint` of a peer is an endpoint in the public, so that the server and client can find each. In our docker-compose example, the endpoint is the IP address of the container. We can prove that in another terminal.
+The `endpoint` of a peer is its endpoint in the public network, so that the server and client can find each other. In the demo, the endpoint is the IP address of the container. We can prove that in another terminal.
 
 ```sh
 docker inspect minimal-server-1 -f "{{ .NetworkSettings.Networks.cloudnative.IPAddress }}"
 docker inspect minimal-client-1 -f "{{ .NetworkSettings.Networks.cloudnative.IPAddress }}"
 ```
 
-Let's ping the server's VPN IP address from the client!
+Let's observe how the packets are flowing in the VPN! First, ping the server's VPN IP address inside the client container.
 
 ```sh
-# at client
 ping 10.192.0.121
 ```
 
-Let's see what we've got in the server!
+Then, observe what we've got inside the server container.
 
 ```sh
-# at server
+apt update && apt install tcp -y
 tcpdump --interface wg0
 ```
 
-The results should read:
+The outputs should read similarly as follows:
 
 ```terminal
 listening on wg0, link-type RAW (Raw IP), snapshot length 262144 bytes
@@ -149,16 +156,14 @@ listening on wg0, link-type RAW (Raw IP), snapshot length 262144 bytes
 ...
 ```
 
-We should see ICMP echo requests and replies being exchanged between the server and the client through the interface wg0. Note that `wg0` is a virtual interface constructed by VPN protocol, in our case WireGuard&reg;. There must be another real interface involved. Let's see that in action!
-
-Interrupt the running `tcpdump` command at the server and run it again with the interface eth0.
+We shall see ICMP echo requests and replies being exchanged between the server and the client through the interface wg0. Note that wg0 is a virtual interface constructed by the VPN protocol, so there must be another real interface involved. Interrupt the running tcpdump at the server and run it again against the interface eth0.
 
 ```sh
 # at server
 tcpdump --interface eth0
 ```
 
-The results should read:
+The outputs:
 
 ```terminal
 listening on eth0, link-type EN10MB (Ethernet), snapshot length 262144 bytes
@@ -167,7 +172,7 @@ listening on eth0, link-type EN10MB (Ethernet), snapshot length 262144 bytes
 ...
 ```
 
-This time, we should see UDP packets being exchanged between the client and the server. `minimal-client-1.cloudnative.51764` represents the IP address and the UDP port of the client container, `e3b9d54cbacf.8765` the server's. We can examine that with the tool `nslookup`.
+This time, we see the UDP packets being exchanged between the client and the server, where `minimal-client-1.cloudnative.51764` represents the domain name and the UDP port of the client container, `e3b9d54cbacf.8765` the server one. We can examine that with the tool `nslookup`.
 
 ```sh
 apt update && apt install nsutils -y
@@ -175,24 +180,23 @@ nslookup minimal-client-1
 nslookup e3b9d54cbacf
 ```
 
-We shall see the IP addresses of the containers are listed.
+We shall see the IP addresses of the containers. Another way is running tcpdump with the flag, `tcpdump --interface eth0 -n`.
 
-In the previous section, we examined the traffic between VPN IP addresses at wg0 interface, which are backed by the
-underlying UDP communication at normal eth0 interface. How about if we ping the server's public IP address directly? Will we see anything at server's wg0 interface?
+So far, we've examined the traffic between the VPN IP addresses at wg0 interface and we know it's backed by the underlying UDP communication at normal eth0 interface. How about if we ping the server's public IP address directly? Will we see anything at server's wg0 interface?
 
 ```sh
 # at client
-ping 172.24.0.2 # server's IP address
+ping 172.24.0.2 # server's public IP address
 ```
 
-If we just run the same command as last time `tcpdump --interface wg0` at the server, we would get nothing. Why? Remember that only the traffic between VPN IP addresses, in our case 10.192.0.121 at the server and 10.192.0.245 at the client, is going through the wg0 interfaces on the both sides. Apart from those, it's just business as usual and the public interface eth0 takes charge.
+If we run `tcpdump --interface wg0` at the server, we will observe nothing. Why? Remember that only the traffic between VPN IP addresses, in our case 10.192.0.121 of the server and 10.192.0.245 of the client, is going through the wg0 interfaces on both sides. Apart from that, it's just business as usual and the public interface eth0 takes charge.
 
 ```sh
 # at server
 tcpdump --interface eth0
 ```
 
-We shall observe ICMP echos between the server and the client containers as follows.
+We shall observe ICMP echos between the server and the client.
 
 ```terminal
 listening on eth0, link-type EN10MB (Ethernet), snapshot length 262144 bytes
@@ -410,3 +414,8 @@ remote: nginx:80
 ```
 
 Why is that? Actually, in the eyes of the client in the legacy network, nothing has changed. It's still a pipe which must go through the server. Therefore, nothing needs to change. For the server and the client in the cloudnative network, it's another story. We have to tell cloudgateway where the service, nginx in our case, is resolvable. To put it another way, we have to tell cloudgateway to which peer the traffic has to be sent. Therefore, the name of this peer has to match the one listed under `peers` in the server's config file. To cut it short: specify the peer of a pipe for the server and the client where the remote endpoint of the service is resolvable.
+
+## Conclusion
+
+- Cloudgateway enables encrypted UDP communication among private networks, which is backed by WireGuard&reg;.
+- Cloudgateway provides intuitive _pipe_ syntax to configure the built-in TCP proxy.
